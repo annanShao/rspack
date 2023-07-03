@@ -1,13 +1,22 @@
 //!  There are methods whose verb is `ChunkGraphChunk`
 
+use std::cmp::Ordering;
+
+use itertools::Itertools;
 use rspack_identifier::{IdentifierLinkedMap, IdentifierSet};
+use rspack_util::comparators::{compare_modules_by_identifier, compare_modules_by_identifier_iter};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
-use crate::ChunkGraph;
 use crate::{
   find_graph_roots, BoxModule, Chunk, ChunkByUkey, ChunkGroupByUkey, ChunkGroupUkey, ChunkUkey,
   Module, ModuleGraph, ModuleGraphModule, ModuleIdentifier, RuntimeGlobals, SourceType,
 };
+use crate::{merge_runtime, ChunkGraph};
+
+pub struct ChunkSizeOptions {
+  pub entry_chunk_multiplicator: Option<i32>,
+  pub chunk_overhead: Option<i32>,
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct ChunkGraphChunk {
@@ -74,6 +83,18 @@ impl ChunkGraph {
       .chunk_graph_chunk_by_chunk_ukey
       .get(chunk_ukey)
       .expect("Chunk should be added before")
+  }
+
+  pub(crate) fn disconnect_chunk_and_entry_module(
+    &mut self,
+    chunk: ChunkUkey,
+    module_identifier: ModuleIdentifier,
+  ) {
+    let chunk_graph_module = self.get_chunk_graph_module_mut(module_identifier);
+    let chunk_graph_chunk = self.get_chunk_graph_chunk_mut(chunk);
+
+    chunk_graph_module.entry_in_chunks.remove(&chunk);
+    chunk_graph_chunk.entry_modules.remove(&module_identifier);
   }
 
   pub(crate) fn connect_chunk_and_entry_module(
@@ -374,5 +395,202 @@ impl ChunkGraph {
       }
     }
     set.into_iter()
+  }
+
+  pub fn get_modules_size(
+    &self,
+    modules: Vec<ModuleIdentifier>,
+    module_graph: &ModuleGraph,
+  ) -> f64 {
+    let mut size: f64 = 0.0;
+    modules
+      .iter()
+      .filter_map(|module_identifier| module_graph.module_by_identifier(module_identifier))
+      .for_each(|module| {
+        module.source_types().iter().for_each(|source_type| {
+          size = size + module.size(source_type);
+        })
+      });
+    size
+  }
+
+  pub fn get_integrated_chunk_size(
+    &self,
+    chunk_a: &Chunk,
+    chunk_b: &Chunk,
+    module_graph: &ModuleGraph,
+    options: ChunkSizeOptions,
+  ) -> f64 {
+    let chunka_ukey = &chunk_a.ukey;
+    let chunkb_ukey = &chunk_b.ukey;
+    let cgca = self.get_chunk_graph_chunk_mut(*chunka_ukey);
+    let cgcb = self.get_chunk_graph_chunk_mut(*chunkb_ukey);
+
+    let mut all_modules = cgca.modules.clone();
+
+    cgcb.modules.iter().for_each(|module| {
+      all_modules.insert(*module);
+    });
+
+    let modules_size = self.get_modules_size(all_modules.into_iter().collect_vec(), module_graph);
+    let chunk_overhead = if options.chunk_overhead.is_none() {
+      10000
+    } else {
+      options.chunk_overhead.expect("It won't happen.")
+    };
+
+    let entry_chunk_multiplicator = if options.entry_chunk_multiplicator.is_none() {
+      10
+    } else {
+      options.entry_chunk_multiplicator.expect("It won't happen.")
+    };
+
+    chunk_overhead as f64 + entry_chunk_multiplicator as f64 + modules_size
+  }
+
+  pub fn is_available_chunk(
+    &self,
+    chunk_group_by_ukey: &ChunkGroupByUkey,
+    chunk_a: &Chunk,
+    chunk_b: &Chunk,
+  ) -> bool {
+    let mut queues = chunk_b.groups.iter().cloned();
+    let mut stack = vec![queues];
+    while let Some(mut current_queue) = stack.last_mut() {
+      while let Some(chunk_group_ukey) = current_queue.next() {
+        if chunk_a.is_in_group(&chunk_group_ukey) {
+          continue;
+        }
+        let chunk_group = chunk_group_by_ukey
+          .get(&chunk_group_ukey)
+          .expect("should have chunk group");
+        if chunk_group.is_initial() {
+          return false;
+        }
+        stack.push(chunk_group.parents.iter().cloned());
+      }
+    }
+    true
+  }
+
+  pub fn compare_chunks(&self, chunk_a: &mut Chunk, chunk_b: &mut Chunk) -> Ordering {
+    let chunka_ukey = &chunk_a.ukey;
+    let chunkb_ukey = &chunk_b.ukey;
+    let cgca = self.get_chunk_graph_chunk_mut(*chunka_ukey);
+    let cgcb = self.get_chunk_graph_chunk_mut(*chunkb_ukey);
+    if cgca.modules.len() > cgcb.modules.len() {
+      return Ordering::Greater;
+    }
+    if cgcb.modules.len() > cgca.modules.len() {
+      return Ordering::Less;
+    }
+    let mut sorted_cgca_modules_iter = cgca
+      .modules
+      .into_iter()
+      .sorted_by(compare_modules_by_identifier);
+    let mut sorted_cgcb_modules_iter = cgcb
+      .modules
+      .into_iter()
+      .sorted_by(compare_modules_by_identifier);
+
+    compare_modules_by_identifier_iter(&mut sorted_cgca_modules_iter, &mut sorted_cgcb_modules_iter)
+  }
+
+  pub fn can_chunks_be_integrated(
+    &self,
+    chunk_group_by_ukey: &ChunkGroupByUkey,
+    chunk_a: &Chunk,
+    chunk_b: &Chunk,
+  ) -> bool {
+    if chunk_a.prevent_integration || chunk_b.prevent_integration {
+      return false;
+    }
+
+    let has_runtime_a = chunk_a.has_runtime(&chunk_group_by_ukey);
+    let has_runtime_b = chunk_b.has_runtime(&chunk_group_by_ukey);
+
+    if has_runtime_a != has_runtime_b {
+      if has_runtime_a {
+        return self.is_available_chunk(chunk_group_by_ukey, chunk_a, chunk_b);
+      } else if has_runtime_b {
+        return self.is_available_chunk(chunk_group_by_ukey, chunk_b, chunk_a);
+      } else {
+        return false;
+      }
+    }
+
+    if self.get_number_of_entry_modules(&chunk_a.ukey) > 0
+      || self.get_number_of_entry_modules(&chunk_b.ukey) > 0
+    {
+      return false;
+    }
+    true
+  }
+
+  pub fn integrate_chunks(
+    &self,
+    module_graph: &ModuleGraph,
+    chunk_group_by_ukey: &ChunkGroupByUkey,
+    chunk_a: &mut Chunk,
+    chunk_b: &mut Chunk,
+  ) {
+    if chunk_a.name.is_some()
+      && chunk_b.name.is_some()
+      && chunk_a.name.unwrap().len() > 0
+      && chunk_b.name.unwrap().len() > 0
+    {
+      if (self.get_number_of_entry_modules(&chunk_a.ukey) > 0)
+        == (self.get_number_of_entry_modules(&chunk_b.ukey) > 0)
+      {
+        let chunk_a_name_len = chunk_a.name.unwrap().len();
+        let chunk_b_name_len = chunk_b.name.unwrap().len();
+        if chunk_a_name_len != chunk_b_name_len {
+          chunk_a.name = if chunk_a_name_len < chunk_b_name_len {
+            chunk_a.name
+          } else {
+            chunk_b.name
+          }
+        } else {
+          chunk_a.name = if chunk_a.name < chunk_b.name {
+            chunk_a.name
+          } else {
+            chunk_b.name
+          }
+        }
+      }
+    } else if chunk_b.name.is_some() && chunk_b.name.unwrap().len() > 0 {
+      chunk_a.name = chunk_b.name
+    }
+
+    for hint in chunk_b.id_name_hints.iter() {
+      chunk_a.id_name_hints.insert(hint.clone());
+    }
+
+    chunk_a.runtime = merge_runtime(chunk_a.runtime, chunk_b.runtime);
+
+    self
+      .get_chunk_modules(&chunk_b.ukey, &module_graph)
+      .iter()
+      .for_each(|module| {
+        self.disconnect_chunk_and_module(&chunk_b.ukey, module.identifier());
+        self.connect_chunk_and_module(chunk_a.ukey, module.identifier());
+      });
+
+    self
+      .get_chunk_entry_modules_with_chunk_group_iterable(&chunk_b.ukey)
+      .iter()
+      .for_each(|(module_identifier, entry)| {
+        self.disconnect_chunk_and_entry_module(chunk_b.ukey, *module_identifier);
+        self.connect_chunk_and_entry_module(chunk_a.ukey, *module_identifier, *entry);
+      });
+
+    chunk_b.groups.iter().for_each(|chunk_group_ukey| {
+      let mut chunk_group = chunk_group_by_ukey
+        .get(chunk_group_ukey)
+        .expect("should have chunk group");
+      chunk_group.replace_chunk(chunk_b.ukey, chunk_a.ukey);
+      chunk_a.add_group(chunk_group.ukey);
+      chunk_b.remove_group(chunk_group.ukey);
+    });
   }
 }

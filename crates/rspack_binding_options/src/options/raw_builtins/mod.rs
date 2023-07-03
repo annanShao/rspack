@@ -1,11 +1,15 @@
 use napi_derive::napi;
-use rspack_core::{Builtins, CodeGeneration, Define, Minification, PluginExt, PresetEnv, Provide};
+use rspack_core::{
+  Builtins, CodeGeneration, Define, LimitChunkCountConfig, Minification, PluginExt, PresetEnv,
+  Provide,
+};
 use rspack_error::internal_error;
 use rspack_plugin_banner::{BannerConfig, BannerPlugin};
 use rspack_plugin_copy::CopyPlugin;
 use rspack_plugin_css::{plugin::CssConfig, CssPlugin};
 use rspack_plugin_dev_friendly_split_chunks::DevFriendlySplitChunksPlugin;
 use rspack_plugin_html::HtmlPlugin;
+use rspack_plugin_limit_chunk_count::LimitChunkCountPlugin;
 use rspack_plugin_progress::ProgressPlugin;
 use serde::Deserialize;
 
@@ -60,6 +64,25 @@ pub struct RawPresetEnv {
 #[napi(object)]
 pub struct RawCodeGeneration {
   pub keep_comments: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[napi(object)]
+pub struct RawLimitChunkCountConfig {
+  pub max_chunks: u32,
+  pub entry_chunk_multiplicator: Option<i32>,
+  pub chunk_overhead: Option<i32>,
+}
+
+impl From<RawLimitChunkCountConfig> for LimitChunkCountConfig {
+  fn from(value: RawLimitChunkCountConfig) -> Self {
+    Self {
+      max_chunks: value.max_chunks,
+      entry_chunk_multiplicator: value.entry_chunk_multiplicator,
+      chunk_overhead: value.chunk_overhead,
+    }
+  }
 }
 
 impl From<RawMinification> for Minification {
@@ -119,6 +142,7 @@ pub struct RawBuiltins {
   pub plugin_import: Option<Vec<RawPluginImportConfig>>,
   pub relay: Option<RawRelayConfig>,
   pub code_generation: Option<RawCodeGeneration>,
+  pub limit_chunk_count: Option<RawLimitChunkCountConfig>,
 }
 
 impl RawOptionsApply for RawBuiltins {
@@ -167,6 +191,8 @@ impl RawOptionsApply for RawBuiltins {
         .for_each(|banner| plugins.push(BannerPlugin::new(banner).boxed()));
     }
 
+    // TODO limit chunk count plugin?
+
     Ok(Builtins {
       minify_options: self.minify_options.map(Into::into),
       preset_env: self.preset_env.map(Into::into),
@@ -187,6 +213,7 @@ impl RawOptionsApply for RawBuiltins {
         .map(|plugin_imports| plugin_imports.into_iter().map(Into::into).collect()),
       relay: self.relay.map(Into::into),
       code_generation: self.code_generation.map(Into::into),
+      limit_chunk_count: self.limit_chunk_count.map(Into::into),
     })
   }
 }

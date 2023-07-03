@@ -80,6 +80,10 @@ impl<Item: Any> Database<Item> {
     self.inner.keys()
   }
 
+  pub fn size(&self) -> usize {
+    self.inner.len()
+  }
+
   pub fn _todo_should_remove_this_method_inner_mut(&mut self) -> &mut FxHashMap<Ukey<Item>, Item> {
     &mut self.inner
   }

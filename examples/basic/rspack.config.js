@@ -6,11 +6,12 @@ const config = {
 		main: "./src/index.js"
 	},
 	builtins: {
-		html: [
-			{
-				template: "./index.html"
-			}
-		]
+		html: [{
+			template: "./index.html"
+		}],
+		limitChunkCount: {
+			maxChunks: 5
+		}
 	}
 };
 module.exports = config;

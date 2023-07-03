@@ -94,6 +94,7 @@ pub struct Builtins {
   pub plugin_import: Option<Vec<PluginImportConfig>>,
   pub relay: Option<RelayConfig>,
   pub code_generation: Option<CodeGeneration>,
+  pub limit_chunk_count: Option<LimitChunkCountConfig>,
 }
 
 #[derive(Debug, Clone, Default, Hash)]
@@ -112,6 +113,13 @@ pub struct CodeGeneration {
 #[derive(Debug, Clone)]
 pub struct CopyPluginConfig {
   pub patterns: Vec<Pattern>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LimitChunkCountConfig {
+  pub max_chunks: u32,
+  pub entry_chunk_multiplicator: Option<i32>,
+  pub chunk_overhead: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy)]

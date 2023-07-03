@@ -168,6 +168,28 @@ impl ChunkGroup {
     false
   }
 
+  pub fn replace_chunk(&mut self, old_chunk: ChunkUkey, new_chunk: ChunkUkey) -> bool {
+    let old_idx = self.chunks.iter().position(|ukey| *ukey == old_chunk);
+    if old_idx.is_none() {
+      return false;
+    }
+    let new_idx = self.chunks.iter().position(|ukey| *ukey == new_chunk);
+    if new_idx.is_none() {
+      self.chunks[old_idx.expect("Will not happen")] = new_chunk;
+      return true;
+    }
+    if new_idx < old_idx {
+      self.chunks.remove(old_idx.expect("Will not happen"));
+      return true;
+    }
+    if new_idx != old_idx {
+      self.chunks[old_idx.expect("Will not happen")] = new_chunk;
+      self.chunks.remove(new_idx.expect("Will not happen"));
+      return true;
+    }
+    false
+  }
+
   pub fn remove_chunk(&mut self, chunk: &ChunkUkey) -> bool {
     let idx = self.chunks.iter().position(|ukey| ukey == chunk);
     if let Some(idx) = idx {
