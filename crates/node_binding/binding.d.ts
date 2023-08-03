@@ -472,6 +472,7 @@ export interface RawBuiltins {
   pluginImport?: Array<RawPluginImportConfig>
   relay?: RawRelayConfig
   codeGeneration?: RawCodeGeneration
+  limitChunkCount?: RawLimitChunkCountConfig
 }
 
 export interface RawCacheGroupOptions {
@@ -629,6 +630,13 @@ export interface RawHtmlPluginConfig {
   title?: string
   favicon?: string
   meta?: Record<string, Record<string, string>>
+}
+
+// TODO 后边两个参数需要考虑是否要加上
+export interface RawLimitChunkCountConfig {
+  maxChunks: numebr
+  entryChunkMultiplicator?: number
+  chunkOverhead?: number
 }
 
 export interface RawIncrementalRebuild {

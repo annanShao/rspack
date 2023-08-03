@@ -34,6 +34,9 @@ pub struct Chunk {
   pub hash: Option<RspackHashDigest>,
   pub content_hash: ChunkContentHash,
   pub chunk_reasons: Vec<String>,
+  // The `prevent_integration` flag is used to indicate whether a chunk can be integrated when
+  // the runtime field of entry points has been set. It will be set to true during the seal step.
+  pub prevent_integration: bool,
 }
 
 impl DatabaseItem for Chunk {
@@ -57,6 +60,7 @@ impl Chunk {
       hash: None,
       content_hash: HashMap::default(),
       chunk_reasons: Default::default(),
+      prevent_integration: false,
     }
   }
 
@@ -70,6 +74,10 @@ impl Chunk {
       }
     }
     None
+  }
+
+  pub(crate) fn remove_group(&mut self, group: ChunkGroupUkey) {
+    self.groups.remove(&group);
   }
 
   pub(crate) fn add_group(&mut self, group: ChunkGroupUkey) {
